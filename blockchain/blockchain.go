@@ -1,9 +1,14 @@
 package blockchain
 
 import (
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+
+	"github.con/steelthedev/my-blockchain/utils"
 )
 
 const (
@@ -16,15 +21,25 @@ type BlockChain struct {
 	transactionPool   []*Transaction
 	chain             []*Block
 	blockChainAddress string
+	port              uint16
 }
 
-func NewBlockChain(blockChainAddress string) *BlockChain {
+func NewBlockChain(blockChainAddress string, port uint16) *BlockChain {
 	b := &Block{}
 	bc := new(BlockChain)
 	bc.blockChainAddress = blockChainAddress
+	bc.port = port
 	bc.CreateBlock(0, b.Hash())
 
 	return bc
+}
+
+func (bc *BlockChain) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Blocks []*Block `json:"chain"`
+	}{
+		Blocks: bc.chain,
+	})
 }
 
 func (bc *BlockChain) CreateBlock(nonce int, previousHash [32]byte) *Block {
@@ -34,10 +49,33 @@ func (bc *BlockChain) CreateBlock(nonce int, previousHash [32]byte) *Block {
 	return b
 }
 
-func (bc *BlockChain) AddTransaction(sender string, recipient string, value float32) error {
+func (bc *BlockChain) AddTransaction(sender string, recipient string, value float32, senderPublicKey *ecdsa.PublicKey, s *utils.Signature) bool {
 	t := NewTransaction(sender, recipient, value)
-	bc.transactionPool = append(bc.transactionPool, t)
-	return nil
+
+	if sender == MINING_SENDER {
+		bc.transactionPool = append(bc.transactionPool, t)
+		return true
+	}
+
+	// if bc.CalculateTotalAmount(sender) < value {
+	// 	log.Println("Error; not enough balance in the wallet")
+	// 	return false
+	// }
+
+	if bc.VerifyTransactionSignature(senderPublicKey, s, t) {
+		bc.transactionPool = append(bc.transactionPool, t)
+		return true
+	} else {
+		log.Println("ERROR: Could not verify transaction")
+	}
+	return false
+}
+
+func (bc *BlockChain) VerifyTransactionSignature(senderPublicKey *ecdsa.PublicKey, s *utils.Signature, t *Transaction) bool {
+	m, _ := json.Marshal(t)
+	h := sha256.Sum256(([]byte(m)))
+
+	return ecdsa.Verify(senderPublicKey, h[:], s.R, s.S)
 }
 
 func (bc *BlockChain) CopyTransactionPool() []*Transaction {
@@ -70,7 +108,7 @@ func (bc *BlockChain) ProofOfWork() int {
 }
 
 func (bc *BlockChain) Mining() bool {
-	bc.AddTransaction(MINING_SENDER, bc.blockChainAddress, MINING_REWARD)
+	bc.AddTransaction(MINING_SENDER, bc.blockChainAddress, MINING_REWARD, nil, nil)
 	nonce := bc.ProofOfWork()
 	previousHash := bc.LastBlock().Hash()
 	bc.CreateBlock(nonce, previousHash)
